@@ -6,8 +6,8 @@ package akka
 
 import akka.TestExtras.Filter.Keys._
 import com.typesafe.sbt.MultiJvmPlugin.MultiJvmKeys.multiJvmCreateLogger
-import com.typesafe.sbt.SbtMultiJvm
-import com.typesafe.sbt.SbtMultiJvm.MultiJvmKeys._
+import com.typesafe.sbt.{ MultiJvmPlugin => SbtMultiJvm }
+import com.typesafe.sbt.MultiJvmPlugin.MultiJvmKeys._
 import sbt.{ Def, _ }
 import sbt.Keys._
 import de.heikoseeberger.sbtheader.HeaderPlugin.autoImport._
@@ -24,8 +24,7 @@ object MultiNode extends AutoPlugin {
 
   // MultiJvm tests can be excluded from normal test target an validatePullRequest
   // with -Dakka.test.multi-in-test=false
-  val multiNodeTestInTest: Boolean =
-    System.getProperty("akka.test.multi-in-test", "true") == "true"
+  val multiNodeTestInTest: Boolean = sys.props.getOrElse("akka.test.multi-in-test", "true").toBoolean
 
   object CliOptions {
     val multiNode = CliOption("akka.test.multi-node", false)
@@ -74,7 +73,7 @@ object MultiNode extends AutoPlugin {
       MultiJvm / jvmOptions := defaultMultiJvmOptions,
       MultiJvm / scalacOptions := (Test / scalacOptions).value,
       multiJvmCreateLogger / logLevel := Level.Debug, //  to see ssh establishment
-      MultiJvm / assembly / assemblyMergeStrategy  := {
+      MultiJvm / assembly / assemblyMergeStrategy := {
         case n if n.endsWith("logback-test.xml")                => MergeStrategy.first
         case n if n.toLowerCase.matches("meta-inf.*\\.default") => MergeStrategy.first
         case n                                                  => (MultiJvm / assembly / assemblyMergeStrategy).value.apply(n)
@@ -85,7 +84,7 @@ object MultiNode extends AutoPlugin {
         (name: String) =>
           new Logger {
             def trace(t: => Throwable): Unit = { logger.trace(t) }
-            def success(message: => String): Unit = { success(message) }
+            def success(message: => String): Unit = { logger.success(message) }
             def log(level: Level.Value, message: => String): Unit =
               logger.log(level, s"[${scala.Console.BLUE}$name${scala.Console.RESET}] $message")
           }

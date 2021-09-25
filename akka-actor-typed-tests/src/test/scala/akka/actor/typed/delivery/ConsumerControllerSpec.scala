@@ -8,7 +8,6 @@ import scala.concurrent.duration._
 
 import com.typesafe.config.ConfigFactory
 import org.scalatest.wordspec.AnyWordSpecLike
-
 import akka.actor.testkit.typed.scaladsl.LogCapturing
 import akka.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import akka.actor.typed.delivery.ConsumerController.DeliverThenStop
@@ -494,6 +493,11 @@ class ConsumerControllerSpec
       consumerProbe1.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
       consumerController ! ConsumerController.Confirmed
 
+      consumerController ! sequencedMessage(producerId, 3, producerControllerProbe.ref)
+      consumerProbe1.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
+
+      // now we know that the ConsumerController has received Confirmed for 2,
+      // and 3 is still not confirmed
       testKit.stop(consumerController)
       producerControllerProbe.expectMessage(ProducerControllerImpl.Ack(2L))
     }

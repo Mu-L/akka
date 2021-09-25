@@ -4,10 +4,11 @@
 
 package akka.stream.scaladsl
 
-import scala.collection.immutable
-import scala.concurrent.Await
-import scala.concurrent.duration._
+import akka.Done
 
+import scala.collection.immutable
+import scala.concurrent.{ Await, ExecutionContext, Future, Promise }
+import scala.concurrent.duration._
 import akka.stream.KillSwitches
 import akka.stream.ThrottleMode
 import akka.stream.testkit.StreamSpec
@@ -20,6 +21,7 @@ import akka.stream.testkit.scaladsl.TestSource
 import akka.testkit.EventFilter
 
 class HubSpec extends StreamSpec {
+  implicit val ec: ExecutionContext = system.dispatcher
 
   "MergeHub" must {
 
@@ -188,37 +190,88 @@ class HubSpec extends StreamSpec {
     "complete after draining control is invoked and all connected producers complete" in assertAllStagesStopped {
       val downstream = TestSubscriber.probe[Int]()
       val (sink, draining) =
-        MergeHub.sourceWithDraining[Int](16).take(20).toMat(Sink.fromSubscriber(downstream))(Keep.left).run()
-      Source(1 to 10).runWith(sink)
-      Source(11 to 20).runWith(sink)
+        MergeHub.sourceWithDraining[Int](16).toMat(Sink.fromSubscriber(downstream))(Keep.left).run()
+
+      val probe1 = TestPublisher.probe[Int]()
+      val probe2 = TestPublisher.probe[Int]()
+
+      Source.fromPublisher(probe1).concat(Source(1 to 10)).runWith(sink)
+      Source.fromPublisher(probe2).concat(Source(11 to 20)).runWith(sink)
+
+      // Wait for the sources to be registered with the MergeHub before starting the draining process
+      downstream.request(2)
+      probe1.sendNext(-1)
+      probe2.sendNext(-2)
+      downstream.expectNextN(2) should contain theSameElementsAs (List(-1, -2))
 
       draining.drainAndComplete()
 
-      downstream.request(20)
-      downstream.expectNextN(20).sorted should ===(1 to 20)
-      downstream.expectComplete()
+      // Give time to the MergeHub to register the draining request
+      val testResult = Promise[Done]()
+      system.scheduler.scheduleOnce(200.millis) {
+        probe1.sendComplete()
+        probe2.sendComplete()
+
+        testResult.completeWith(Future {
+          downstream.request(20)
+          downstream.expectNextN(20).sorted should ===(1 to 20)
+
+          downstream.request(1)
+          downstream.expectComplete()
+          Done
+        })
+      }
+      testResult.future.futureValue
     }
 
     "immediately cancel new producers while draining" in assertAllStagesStopped {
       val downstream = TestSubscriber.probe[Int]()
       val (sink, draining) =
-        MergeHub.sourceWithDraining[Int](16).take(20).toMat(Sink.fromSubscriber(downstream))(Keep.left).run()
-      Source(1 to 10).runWith(sink)
-      Source(11 to 20).runWith(sink)
+        MergeHub.sourceWithDraining[Int](16).toMat(Sink.fromSubscriber(downstream))(Keep.left).run()
+
+      val probe1 = TestPublisher.probe[Int]()
+      val probe2 = TestPublisher.probe[Int]()
+
+      Source.fromPublisher(probe1).concat(Source(1 to 10)).runWith(sink)
+      Source.fromPublisher(probe2).concat(Source(11 to 20)).runWith(sink)
+
+      // Wait for the sources to be registered with the MergeHub before starting the draining process
+      downstream.request(2)
+      probe1.sendNext(-1)
+      probe2.sendNext(-2)
+      downstream.expectNextN(2) should contain theSameElementsAs (List(-1, -2))
+
       draining.drainAndComplete()
 
-      downstream.request(10)
-      val firstBatch = downstream.expectNextN(10)
+      // Give time to the MergeHub to register the draining request
+      val testResult = Promise[Done]()
+      system.scheduler.scheduleOnce(200.millis) {
+        testResult.completeWith(Future {
+          val upstream = TestPublisher.probe[Int]()
+          Source.fromPublisher(upstream).runWith(sink)
+          upstream.expectCancellation()
 
-      val upstream = TestPublisher.probe[Int]()
-      Source.fromPublisher(upstream).runWith(sink)
-      upstream.expectCancellation()
+          probe1.sendComplete()
+          probe2.sendComplete()
 
-      downstream.request(10)
-      val secondBatch = downstream.expectNextN(10)
+          downstream.request(20)
+          downstream.expectNextN(20).sorted should ===(1 to 20)
 
-      (firstBatch ++ secondBatch).sorted should ===(1 to 20)
+          downstream.request(1)
+          downstream.expectComplete()
+          Done
+        })
+      }
+      testResult.future.futureValue
+    }
 
+    "immediately complete if no producers are registered" in assertAllStagesStopped {
+      val downstream = TestSubscriber.probe[Int]()
+      val (_, draining) =
+        MergeHub.sourceWithDraining[Int](16).toMat(Sink.fromSubscriber(downstream))(Keep.left).run()
+
+      draining.drainAndComplete()
+      downstream.request(1)
       downstream.expectComplete()
     }
   }

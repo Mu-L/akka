@@ -4,8 +4,6 @@
 
 package akka.remote.classic
 
-import java.util.concurrent.TimeoutException
-
 import scala.collection.immutable
 import scala.concurrent.Await
 import scala.concurrent.duration._
@@ -23,6 +21,7 @@ import akka.testkit.TestActors.EchoActor
 object ActorsLeakSpec {
 
   val config = ConfigFactory.parseString("""
+       akka.loggers = ["akka.testkit.SilenceAllTestEventListener"]
        akka.actor.provider = remote
        akka.remote.artery.enabled = false
        akka.remote.classic.netty.tcp.applied-adapters = ["trttl"]
@@ -104,7 +103,7 @@ class ActorsLeakSpec extends AkkaSpec(ActorsLeakSpec.config) with ImplicitSender
           remoteSystem.terminate()
         }
 
-        Await.ready(remoteSystem.whenTerminated, 10.seconds)
+        Await.result(remoteSystem.whenTerminated, 10.seconds)
       }
 
       // Quarantine an old incarnation case
@@ -147,7 +146,7 @@ class ActorsLeakSpec extends AkkaSpec(ActorsLeakSpec.config) with ImplicitSender
           remoteSystem.terminate()
         }
 
-        Await.ready(remoteSystem.whenTerminated, 10.seconds)
+        Await.result(remoteSystem.whenTerminated, 10.seconds)
 
       }
 
@@ -170,15 +169,17 @@ class ActorsLeakSpec extends AkkaSpec(ActorsLeakSpec.config) with ImplicitSender
           probe.expectMsgType[ActorIdentity].ref.nonEmpty should be(true)
 
           // This will make sure that no SHUTDOWN message gets through
-          Await.ready(RARP(system).provider.transport.managementCommand(ForceDisassociate(remoteAddress)), 3.seconds)
+          Await.result(RARP(system).provider.transport.managementCommand(ForceDisassociate(remoteAddress)), 3.seconds)
 
         } finally {
           remoteSystem.terminate()
         }
 
-        EventFilter.warning(pattern = "Association with remote system", occurrences = 1).intercept {
-          Await.ready(remoteSystem.whenTerminated, 10.seconds)
-        }
+        EventFilter
+          .warning(start = s"Association with remote system [${remoteAddress}] has failed", occurrences = 1)
+          .intercept {
+            Await.result(remoteSystem.whenTerminated, 10.seconds)
+          }
       }
 
       // Remote idle for too long case
@@ -203,18 +204,13 @@ class ActorsLeakSpec extends AkkaSpec(ActorsLeakSpec.config) with ImplicitSender
         // All system messages has been acked now on this side
 
         // This will make sure that no SHUTDOWN message gets through
-        Await.ready(RARP(system).provider.transport.managementCommand(ForceDisassociate(remoteAddress)), 3.seconds)
+        Await.result(RARP(system).provider.transport.managementCommand(ForceDisassociate(remoteAddress)), 3.seconds)
 
       } finally {
         remoteSystem.terminate()
       }
 
-      EventFilter.warning(pattern = "Association with remote system", occurrences = 1).intercept {
-        Await.ready(remoteSystem.whenTerminated, 10.seconds)
-      }
-
-      EventFilter[TimeoutException](occurrences = 1).intercept {}
-
+      Await.result(remoteSystem.whenTerminated, 10.seconds)
       awaitAssert(assertResult(initialActors)(targets.flatMap(collectLiveActors).toSet), 10.seconds)
     }
 

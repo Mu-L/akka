@@ -5,16 +5,14 @@
 package akka.remote.testkit
 
 import java.net.{ InetAddress, InetSocketAddress }
-
 import scala.collection.immutable
 import scala.concurrent.{ Await, Awaitable }
 import scala.concurrent.duration._
 import scala.util.control.NonFatal
-
 import com.typesafe.config.{ Config, ConfigFactory, ConfigObject }
+
 import language.implicitConversions
 import org.jboss.netty.channel.ChannelException
-
 import akka.actor._
 import akka.actor.RootActorPath
 import akka.event.{ Logging, LoggingAdapter }
@@ -173,6 +171,20 @@ object MultiNodeSpec {
   require(selfPort >= 0 && selfPort < 65535, "multinode.port is out of bounds: " + selfPort)
 
   /**
+   * UDP Port number to be used on this node. 0 means a random port.
+   *
+   * {{{
+   * -Dmultinode.udp-port=0
+   * }}}
+   */
+  val udpPort: Option[Int] = Option(System.getProperty("multinode.udp-port")) match {
+    case None    => None
+    case Some(_) => Some(Integer.getInteger("multinode.udp-port", 0))
+  }
+
+  require(udpPort.getOrElse(1) >= 0 && udpPort.getOrElse(1) < 65535, "multinode.udp-port is out of bounds: " + udpPort)
+
+  /**
    * Name (or IP address; must be resolvable using InetAddress.getByName)
    * of the host that the server node is running on.
    *
@@ -245,6 +257,24 @@ object MultiNodeSpec {
     ConfigFactory.parseMap(map.asJava)
   }
 
+  // Multi node tests on kuberenetes require fixed ports to be mapped and exposed
+  // This method change the port bindings to avoid conflicts
+  // Please note that with the current setup only port 5000 and 5001 are exposed in kubernetes
+  def configureNextPortIfFixed(config: Config): Config = {
+    val arteryPortConfig = getNextPortString("akka.remote.artery.canonical.port", config)
+    val nettyPortConfig = getNextPortString("akka.remote.classic.netty.tcp.port", config)
+    ConfigFactory.parseString(s"""{
+      $arteryPortConfig
+      $nettyPortConfig
+      }""").withFallback(config)
+  }
+
+  private def getNextPortString(key: String, config: Config): String = {
+    val port = config.getInt(key)
+    if (port != 0)
+      s"""$key = ${port + 1}"""
+    else ""
+  }
 }
 
 /**
@@ -287,7 +317,7 @@ abstract class MultiNodeSpec(
         }
     })
 
-  val log: LoggingAdapter = Logging(system, this.getClass)
+  val log: LoggingAdapter = Logging(system, this)(_.getClass.getName)
 
   /**
    * Enrich `.await()` onto all Awaitables, using remaining duration from the innermost

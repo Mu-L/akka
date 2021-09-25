@@ -187,7 +187,7 @@ object Persistence extends ExtensionId[Persistence] with ExtensionIdProvider {
 
   /** Check for default or missing identity. */
   private def isEmpty(text: String) = {
-    text == null || text.length == 0
+    text == null || text.isEmpty
   }
 }
 
@@ -198,7 +198,7 @@ class Persistence(val system: ExtendedActorSystem) extends Extension {
 
   import Persistence._
 
-  private def log: LoggingAdapter = Logging(system, getClass)
+  private def log: LoggingAdapter = Logging(system, classOf[Persistence])
 
   private val NoSnapshotStorePluginId = "akka.persistence.no-snapshot-store"
 

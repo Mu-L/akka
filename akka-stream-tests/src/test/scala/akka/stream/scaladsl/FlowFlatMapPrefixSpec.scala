@@ -22,14 +22,15 @@ import akka.stream.testkit.{ StreamSpec, TestPublisher, TestSubscriber }
 import akka.stream.testkit.Utils.TE
 import akka.stream.testkit.scaladsl.StreamTestKit.assertAllStagesStopped
 
-class FlowFlatMapPrefixSpec extends StreamSpec {
+// Debug loglevel to diagnose https://github.com/akka/akka/issues/30469
+class FlowFlatMapPrefixSpec extends StreamSpec("akka.loglevel = debug") {
   def src10(i: Int = 0) = Source(i until (i + 10))
 
   for {
     att <- List(
       Attributes.NestedMaterializationCancellationPolicy.EagerCancellation,
       Attributes.NestedMaterializationCancellationPolicy.PropagateToNested)
-    delayDownstreanCancellation = att.propagateToNestedMaterialization
+    delayDownstreamCancellation = att.propagateToNestedMaterialization
     attributes = Attributes(att)
   } {
 
@@ -338,21 +339,22 @@ class FlowFlatMapPrefixSpec extends StreamSpec {
         subUpstream.expectRequest() should be >= (1L)
         subUpstream.sendNext(0)
         subUpstream.sendNext(1)
-        subDownstream.cancel()
 
         //subflow not materialized yet, hence mat value (future) isn't ready yet
         matFlowWatchTerm.value should be(empty)
 
-        if (delayDownstreanCancellation) {
+        if (delayDownstreamCancellation) {
           srcWatchTermF.value should be(empty)
           //this one is sent AFTER downstream cancellation
           subUpstream.sendNext(2)
 
+          subDownstream.cancel()
           subUpstream.expectCancellation()
 
           matFlowWatchTerm.futureValue should ===(Done)
           srcWatchTermF.futureValue should ===(Done)
         } else {
+          subDownstream.cancel()
           srcWatchTermF.futureValue should ===(Done)
           matFlowWatchTerm.failed.futureValue should be(a[NeverMaterializedException])
         }
@@ -385,7 +387,7 @@ class FlowFlatMapPrefixSpec extends StreamSpec {
         subUpstream.sendNext(1)
         subDownstream.asInstanceOf[SubscriptionWithCancelException].cancel(TE("that again?!"))
 
-        if (delayDownstreanCancellation) {
+        if (delayDownstreamCancellation) {
           matFlowWatchTerm.value should be(empty)
           srcWatchTermF.value should be(empty)
 
@@ -422,7 +424,6 @@ class FlowFlatMapPrefixSpec extends StreamSpec {
           .withAttributes(attributes)
           .run()
 
-        notUsedF.value should be(empty)
         suffixF.value should be(empty)
         srcWatchTermF.value should be(empty)
 
@@ -617,6 +618,72 @@ class FlowFlatMapPrefixSpec extends StreamSpec {
 
         log.debug("closer assigned, waiting for completion")
         fNotUsed.futureValue should be(NotUsed)
+      }
+
+      "complete when downstream cancels before pulling" in assertAllStagesStopped {
+        val fSeq = Source
+          .single(1)
+          .flatMapPrefixMat(1) { prefix =>
+            Flow[Int].mapMaterializedValue(_ => prefix)
+          }(Keep.right)
+          .to(Sink.cancelled)
+          .withAttributes(attributes)
+          .run()
+
+        if (att.propagateToNestedMaterialization) {
+          fSeq.futureValue should equal(Seq(1))
+        } else {
+          fSeq.failed.futureValue should be(a[NeverMaterializedException])
+        }
+      }
+
+      "complete when downstream cancels before pulling, prefix=0" in assertAllStagesStopped {
+        val fSeq = Source
+          .single(1)
+          .flatMapPrefixMat(0) { prefix =>
+            Flow[Int].mapMaterializedValue(_ => prefix)
+          }(Keep.right)
+          .to(Sink.cancelled)
+          .withAttributes(attributes)
+          .run()
+
+        if (att.propagateToNestedMaterialization) {
+          fSeq.futureValue should equal(Nil)
+        } else {
+          fSeq.failed.futureValue should be(a[NeverMaterializedException])
+        }
+      }
+
+      "complete when downstream cancels before pulling and upstream does not produce" in assertAllStagesStopped {
+        val fSeq = Source(List.empty[Int])
+          .flatMapPrefixMat(1) { prefix =>
+            Flow[Int].mapMaterializedValue(_ => prefix)
+          }(Keep.right)
+          .to(Sink.cancelled)
+          .withAttributes(attributes)
+          .run()
+
+        if (att.propagateToNestedMaterialization) {
+          fSeq.futureValue should equal(Nil)
+        } else {
+          fSeq.failed.futureValue should be(a[NeverMaterializedException])
+        }
+      }
+
+      "complete when downstream cancels before pulling and upstream does not produce, prefix=0" in assertAllStagesStopped {
+        val fSeq = Source(List.empty[Int])
+          .flatMapPrefixMat(0) { prefix =>
+            Flow[Int].mapMaterializedValue(_ => prefix)
+          }(Keep.right)
+          .to(Sink.cancelled)
+          .withAttributes(attributes)
+          .run()
+
+        if (att.propagateToNestedMaterialization) {
+          fSeq.futureValue should equal(Nil)
+        } else {
+          fSeq.failed.futureValue should be(a[NeverMaterializedException])
+        }
       }
     }
   }
